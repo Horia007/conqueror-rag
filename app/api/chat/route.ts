@@ -1,4 +1,5 @@
 import { anthropic } from "@ai-sdk/anthropic";
+import { Index } from "@upstash/vector";
 import {
   convertToModelMessages,
   pruneMessages,
@@ -9,6 +10,14 @@ import {
 export const maxDuration = 30;
 
 const SYSTEM_PROMPT = "You are a helpful assistant.";
+const RETRIEVAL_TOP_K = 5;
+
+type ChunkMetadata = {
+  title: string;
+  url: string;
+  images: string[];
+  id: string;
+};
 
 function getSystemPrompt(override?: string): string {
   const prompt = (override ?? SYSTEM_PROMPT).trim();
@@ -26,9 +35,112 @@ function sanitizeUIMessages(messages: UIMessage[]): Omit<UIMessage, "id">[] {
     .filter((message) => message.parts.length > 0);
 }
 
+function getLastUserMessageText(messages: UIMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const message = messages[i];
+    if (message.role !== "user") continue;
+
+    const text = message.parts
+      .filter((part) => part.type === "text")
+      .map((part) => part.text)
+      .join("")
+      .trim();
+
+    if (text) return text;
+  }
+
+  return null;
+}
+
+function buildContextBlock(
+  results: Awaited<ReturnType<Index<ChunkMetadata>["query"]>>,
+): string | null {
+  const sections = results
+    .map((result, index) => {
+      const text = result.data?.trim();
+      if (!text) return null;
+
+      const title = result.metadata?.title ?? "Unknown";
+      const url = result.metadata?.url ?? "";
+
+      return `[${index + 1}] Title: ${title}
+URL: ${url}
+${text}`;
+    })
+    .filter((section): section is string => section !== null);
+
+  return sections.length > 0 ? sections.join("\n\n") : null;
+}
+
+type RetrievalResult = Awaited<ReturnType<Index<ChunkMetadata>["query"]>>;
+
+async function retrieveContext(query: string): Promise<{
+  context: string | null;
+  results: RetrievalResult;
+}> {
+  const restUrl = process.env.UPSTASH_VECTOR_REST_URL;
+  const restToken = process.env.UPSTASH_VECTOR_REST_TOKEN;
+
+  if (!restUrl || !restToken) {
+    console.warn(
+      "RAG skipped: missing UPSTASH_VECTOR_REST_URL or UPSTASH_VECTOR_REST_TOKEN",
+    );
+    return { context: null, results: [] };
+  }
+
+  if (!query.trim()) {
+    return { context: null, results: [] };
+  }
+
+  try {
+    const index = new Index<ChunkMetadata>({
+      url: restUrl,
+      token: restToken,
+    });
+
+    const results = await index.query({
+      data: query,
+      topK: RETRIEVAL_TOP_K,
+      includeMetadata: true,
+      includeData: true,
+    });
+
+    const context = buildContextBlock(results);
+
+    if (results.length > 0 && !context) {
+      console.warn(
+        "RAG: query returned results but all chunks lack `data` field",
+      );
+    }
+
+    return { context, results };
+  } catch (error) {
+    console.error("Upstash retrieval failed:", error);
+    return { context: null, results: [] };
+  }
+}
+
+function buildRagSystemPrompt(context: string | null): string {
+  if (!context) {
+    return getSystemPrompt();
+  }
+
+  return `${getSystemPrompt()}
+
+Answer the user's question using the CONTEXT below. If the context does not contain enough information, say so clearly.
+
+--- CONTEXT ---
+${context}
+--- END CONTEXT ---`;
+}
+
 export async function POST(req: Request) {
   try {
     const { messages }: { messages: UIMessage[] } = await req.json();
+    const userQuery = getLastUserMessageText(messages);
+    const { context } = userQuery
+      ? await retrieveContext(userQuery)
+      : { context: null };
 
     const modelMessages = pruneMessages({
       messages: await convertToModelMessages(sanitizeUIMessages(messages)),
@@ -36,7 +148,7 @@ export async function POST(req: Request) {
 
     const result = streamText({
       model: anthropic("claude-sonnet-4-6"),
-      system: getSystemPrompt(),
+      system: buildRagSystemPrompt(context),
       messages: modelMessages,
     });
 
