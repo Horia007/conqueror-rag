@@ -1,36 +1,95 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Conqueror RAG
 
-## Getting Started
+A minimal RAG (Retrieval-Augmented Generation) chat app. It answers questions
+about [The Conqueror](https://help.theconqueror.events) using only the content
+of their help center, retrieved from a vector database and grounded with Claude.
 
-First, run the development server:
+## How it works
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+```
+help center URLs (urls.txt)
+        │
+        ▼  scripts/ingest.ts        ← one-off ingestion
+  Upstash Vector  (text chunks + embeddings)
+        │
+        ▼  POST /api/chat           ← retrieval + streaming
+   Claude (Anthropic)
+        │
+        ▼
+   Chat UI (streamed Markdown answers with sources)
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+- **Frontend:** Next.js (App Router) + Tailwind CSS. The chat UI lives in
+  [`components/chat.tsx`](components/chat.tsx); assistant replies are rendered as
+  Markdown by [`components/markdown-message.tsx`](components/markdown-message.tsx).
+- **API:** [`app/api/chat/route.ts`](app/api/chat/route.ts) takes the latest user
+  message, queries Upstash Vector for relevant help-center chunks, injects them
+  into the system prompt, and streams the answer with the Vercel AI SDK.
+- **Ingestion:** [`scripts/ingest.ts`](scripts/ingest.ts) fetches each URL in
+  `urls.txt`, extracts the article text, chunks it, and upserts it into Upstash
+  Vector (which generates embeddings via its built-in model).
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+## Tech stack
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+- Next.js 16 (App Router) + React 19 + TypeScript
+- Vercel AI SDK (`ai`, `@ai-sdk/react`, `@ai-sdk/anthropic`) — model `claude-sonnet-4-6`
+- Upstash Vector (`@upstash/vector`) for retrieval
+- Tailwind CSS v4
+- `cheerio` for HTML parsing during ingestion
 
-## Learn More
+## Prerequisites
 
-To learn more about Next.js, take a look at the following resources:
+- Node.js 20+
+- An [Anthropic](https://console.anthropic.com) API key
+- An [Upstash Vector](https://console.upstash.com) index **created with an
+  embedding model** (the ingestion sends raw text, not vectors)
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## Environment variables
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Copy the example file and fill in your keys:
 
-## Deploy on Vercel
+```bash
+cp .env.local.example .env.local
+```
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+| Variable | Used by | Description |
+| --- | --- | --- |
+| `ANTHROPIC_API_KEY` | `/api/chat` | Anthropic API key (server-only) |
+| `UPSTASH_VECTOR_REST_URL` | `/api/chat`, ingest | Upstash Vector REST URL |
+| `UPSTASH_VECTOR_REST_TOKEN` | `/api/chat`, ingest | Upstash Vector REST token |
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+## Local development
+
+```bash
+npm install
+npm run dev
+```
+
+Open [http://localhost:3000](http://localhost:3000).
+
+## Ingesting content
+
+Populate the vector index from the URLs in `urls.txt`:
+
+```bash
+npm run ingest
+```
+
+Re-running is safe: each chunk has a stable id (`<article-slug>--<n>`), so an
+upsert updates existing rows instead of duplicating them.
+
+## Build & lint
+
+```bash
+npm run build   # production build
+npm run lint    # eslint
+```
+
+> There are no automated tests in this project.
+
+## Deploy
+
+Deploys to [Vercel](https://vercel.com) as a standard Next.js app. Add the three
+environment variables above in **Project Settings → Environment Variables**, then
+redeploy (env vars are not applied to existing deployments automatically). The
+Anthropic and Upstash clients run server-side only.
