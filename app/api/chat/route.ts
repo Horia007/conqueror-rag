@@ -9,7 +9,6 @@ import {
 
 export const maxDuration = 30;
 
-const SYSTEM_PROMPT = "You are a helpful assistant.";
 const RETRIEVAL_TOP_K = 5;
 
 type ChunkMetadata = {
@@ -18,11 +17,6 @@ type ChunkMetadata = {
   images: string[];
   id: string;
 };
-
-function getSystemPrompt(override?: string): string {
-  const prompt = (override ?? SYSTEM_PROMPT).trim();
-  return prompt.length > 0 ? prompt : SYSTEM_PROMPT;
-}
 
 function sanitizeUIMessages(messages: UIMessage[]): Omit<UIMessage, "id">[] {
   return messages
@@ -121,17 +115,35 @@ async function retrieveContext(query: string): Promise<{
 }
 
 function buildRagSystemPrompt(context: string | null): string {
-  if (!context) {
-    return getSystemPrompt();
-  }
+  const contextBlock =
+    context ??
+    "(No relevant excerpts from the help center were found for this question.)";
 
-  return `${getSystemPrompt()}
+  return `You are the customer support assistant for The Conqueror, a virtual fitness
+challenge platform where people walk, run, or cycle real distances, track them
+in the app, and earn physical medals.
 
-Answer the user's question using the CONTEXT below. If the context does not contain enough information, say so clearly.
+Answer the user's question using ONLY the information in the CONTEXT section
+below. The context contains excerpts from The Conqueror's official help center.
 
---- CONTEXT ---
-${context}
---- END CONTEXT ---`;
+Rules:
+- Base your answer strictly on the CONTEXT. Do not use outside knowledge about
+  The Conqueror, and never invent steps, prices, dates, policies, or details
+  that are not in the context.
+- If the CONTEXT does not contain enough information to answer, say so honestly
+  in one sentence and suggest contacting The Conqueror support (the live chat
+  in the app, or their support email). Do not guess.
+- Keep answers short and friendly, matching The Conqueror's encouraging,
+  adventurous tone. Get to the point — a few sentences, or short numbered steps
+  when the answer is a procedure. Don't pad or repeat the question.
+- Keep formatting minimal; don't add large headings for short answers.
+- Reply in the same language the user used.
+- At the end, add a line starting with "Source:" listing the help article(s)
+  you actually used, each as a Markdown link [title](url). List each article
+  once, even if you used several excerpts from it.
+
+CONTEXT (excerpts from The Conqueror help center):
+${contextBlock}`;
 }
 
 export async function POST(req: Request) {

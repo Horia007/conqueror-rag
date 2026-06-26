@@ -3,6 +3,8 @@
 import { useChat } from "@ai-sdk/react";
 import { useState } from "react";
 
+import { MarkdownMessage } from "@/components/markdown-message";
+
 export function Chat() {
   const [input, setInput] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -41,12 +43,21 @@ export function Chat() {
             <p className="text-xs font-medium mb-1 text-zinc-500">
               {message.role === "user" ? "Tu" : "Claude"}
             </p>
-            {message.parts.map((part, index) =>
-              part.type === "text" ? (
-                <span key={index} className="whitespace-pre-wrap">
-                  {part.text}
-                </span>
-              ) : null,
+            {message.role === "assistant" ? (
+              <MarkdownMessage
+                content={message.parts
+                  .filter((part) => part.type === "text")
+                  .map((part) => part.text)
+                  .join("")}
+              />
+            ) : (
+              message.parts.map((part, index) =>
+                part.type === "text" ? (
+                  <span key={index} className="whitespace-pre-wrap">
+                    {part.text}
+                  </span>
+                ) : null,
+              )
             )}
           </div>
         ))}
